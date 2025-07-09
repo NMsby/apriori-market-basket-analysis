@@ -493,3 +493,293 @@ def analyze_frequent_itemsets(frequent_itemsets: Dict[int, Set[FrozenSet[str]]],
                     print(f"  ... and {len(sorted_itemsets) - 10} more")
 
     print("=" * 60)
+
+
+def generate_association_rules(frequent_itemsets: Dict[int, Set[FrozenSet[str]]],
+                               transactions: List[List[str]],
+                               min_confidence: float) -> List[Dict]:
+    """
+    Generate association rules from frequent itemsets
+
+    Rule: X → Y where X ∪ Y is a frequent itemset
+
+    Args:
+        frequent_itemsets (dict): Dictionary of frequent itemsets by size
+        transactions (list): List of transactions for support calculation
+        min_confidence (float): Minimum confidence threshold (0 to 1)
+
+    Returns:
+        list: List of association rules with metrics
+
+    For each frequent itemset of size ≥ 2:
+    1. Generate all possible ways to split it into antecedent → consequent
+    2. Calculate confidence = support(antecedent ∪ consequent) / support(antecedent)
+    3. Keep rules with confidence ≥ min_confidence
+    4. Calculate lift = confidence / support(consequent)
+    """
+    if not 0 <= min_confidence <= 1:
+        raise ValueError("min_confidence must be between 0 and 1")
+
+    rules = []
+    support_cache = {}
+
+    # Generate rules from itemsets of size 2 and above
+    for k in range(2, len(frequent_itemsets) + 1):
+        if k not in frequent_itemsets:
+            continue
+
+        for itemset in frequent_itemsets[k]:
+            items = list(itemset)
+
+            # Generate all possible antecedent-consequent pairs
+            for i in range(1, len(items)):  # i is the size of antecedent
+                for antecedent_items in combinations(items, i):
+                    antecedent = frozenset(antecedent_items)
+                    consequent = itemset - antecedent
+
+                    # Calculate metrics
+                    support_itemset = calculate_support(itemset, transactions, support_cache)
+                    support_antecedent = calculate_support(antecedent, transactions, support_cache)
+
+                    if support_antecedent > 0:
+                        confidence = support_itemset / support_antecedent
+
+                        if confidence >= min_confidence:
+                            support_consequent = calculate_support(consequent, transactions, support_cache)
+                            lift = confidence / support_consequent if support_consequent > 0 else 0
+
+                            rules.append({
+                                'antecedent': set(antecedent),
+                                'consequent': set(consequent),
+                                'support': support_itemset,
+                                'confidence': confidence,
+                                'lift': lift,
+                                'antecedent_support': support_antecedent,
+                                'consequent_support': support_consequent
+                            })
+
+    return rules
+
+
+def calculate_rule_metrics(antecedent: FrozenSet[str],
+                           consequent: FrozenSet[str],
+                           transactions: List[List[str]]) -> Dict[str, float]:
+    """
+    Calculate all metrics for a single association rule
+
+    Args:
+        antecedent (frozenset): Antecedent itemset
+        consequent (frozenset): Consequent itemset
+        transactions (list): List of transactions
+
+    Returns:
+        dict: Dictionary with support, confidence, lift, and other metrics
+    """
+    itemset = antecedent.union(consequent)
+
+    support_itemset = calculate_support(itemset, transactions)
+    support_antecedent = calculate_support(antecedent, transactions)
+    support_consequent = calculate_support(consequent, transactions)
+
+    confidence = support_itemset / support_antecedent if support_antecedent > 0 else 0
+    lift = confidence / support_consequent if support_consequent > 0 else 0
+
+    # Additional metrics
+    conviction = (1 - support_consequent) / (1 - confidence) if confidence < 1 else float('inf')
+    leverage = support_itemset - (support_antecedent * support_consequent)
+
+    return {
+        'support': support_itemset,
+        'confidence': confidence,
+        'lift': lift,
+        'antecedent_support': support_antecedent,
+        'consequent_support': support_consequent,
+        'conviction': conviction,
+        'leverage': leverage
+    }
+
+
+def filter_rules_by_metrics(rules: List[Dict],
+                            min_support: float = 0.0,
+                            min_confidence: float = 0.0,
+                            min_lift: float = 0.0,
+                            max_antecedent_size: int = None) -> List[Dict]:
+    """
+    Filter association rules based on multiple criteria
+
+    Args:
+        rules (list): List of association rules
+        min_support (float): Minimum support threshold
+        min_confidence (float): Minimum confidence threshold
+        min_lift (float): Minimum lift threshold
+        max_antecedent_size (int): Maximum antecedent size
+
+    Returns:
+        list: Filtered list of rules
+    """
+    filtered_rules = []
+
+    for rule in rules:
+        # Apply filters
+        if rule['support'] < min_support:
+            continue
+        if rule['confidence'] < min_confidence:
+            continue
+        if rule['lift'] < min_lift:
+            continue
+        if max_antecedent_size and len(rule['antecedent']) > max_antecedent_size:
+            continue
+
+        filtered_rules.append(rule)
+
+    return filtered_rules
+
+
+def sort_rules(rules: List[Dict], sort_by: str = 'confidence', ascending: bool = False) -> List[Dict]:
+    """
+    Sort association rules by a specified metric
+
+    Args:
+        rules (list): List of association rules
+        sort_by (str): Metric to sort by ('confidence', 'lift', 'support')
+        ascending (bool): Sort order
+
+    Returns:
+        list: Sorted list of rules
+    """
+    if sort_by not in ['confidence', 'lift', 'support']:
+        raise ValueError("sort_by must be 'confidence', 'lift', or 'support'")
+
+    return sorted(rules, key=lambda x: x[sort_by], reverse=not ascending)
+
+
+def analyze_rules(rules: List[Dict]) -> None:
+    """
+    Analyze and filter association rules based on different criteria
+    """
+    if not rules:
+        print("No rules to analyze!")
+        return
+
+    print("=" * 60)
+    print("           ASSOCIATION RULES ANALYSIS")
+    print("=" * 60)
+
+    # Basic statistics
+    print(f"Total rules generated: {len(rules)}")
+
+    # Support distribution
+    supports = [rule['support'] for rule in rules]
+    confidences = [rule['confidence'] for rule in rules]
+    lifts = [rule['lift'] for rule in rules]
+
+    print(f"\nRule metrics distribution:")
+    print(f"  Support   - Min: {min(supports):.4f}, Max: {max(supports):.4f}, Avg: {np.mean(supports):.4f}")
+    print(f"  Confidence - Min: {min(confidences):.4f}, Max: {max(confidences):.4f}, Avg: {np.mean(confidences):.4f}")
+    print(f"  Lift      - Min: {min(lifts):.4f}, Max: {max(lifts):.4f}, Avg: {np.mean(lifts):.4f}")
+
+    # TOP 10 RULES BY LIFT (Most surprising associations)
+    print(f"\n🚀 TOP 10 RULES BY LIFT (Most surprising associations):")
+    print("-" * 60)
+    lift_sorted = sort_rules(rules, 'lift', ascending=False)
+
+    for i, rule in enumerate(lift_sorted[:10]):
+        antecedent_str = ', '.join(sorted(rule['antecedent']))
+        consequent_str = ', '.join(sorted(rule['consequent']))
+        print(f"  {i + 1:2d}. {{{antecedent_str}}} → {{{consequent_str}}}")
+        print(f"      Lift: {rule['lift']:.3f} | Confidence: {rule['confidence']:.3f} | Support: {rule['support']:.4f}")
+
+    # TOP 10 RULES BY SUPPORT (Most frequent associations)
+    print(f"\n📊 TOP 10 RULES BY SUPPORT (Most frequent associations):")
+    print("-" * 60)
+    support_sorted = sort_rules(rules, 'support', ascending=False)
+
+    for i, rule in enumerate(support_sorted[:10]):
+        antecedent_str = ', '.join(sorted(rule['antecedent']))
+        consequent_str = ', '.join(sorted(rule['consequent']))
+        print(f"  {i + 1:2d}. {{{antecedent_str}}} → {{{consequent_str}}}")
+        print(f"      Support: {rule['support']:.4f} | Confidence: {rule['confidence']:.3f} | Lift: {rule['lift']:.3f}")
+
+    # BALANCED RULES (good confidence AND lift)
+    print(f"\n⚖️ BALANCED RULES (Confidence > 0.5 and Lift > 1.5):")
+    print("-" * 60)
+    balanced_rules = filter_rules_by_metrics(rules, min_confidence=0.5, min_lift=1.5)
+    balanced_sorted = sort_rules(balanced_rules, 'confidence', ascending=False)
+
+    if balanced_rules:
+        for i, rule in enumerate(balanced_sorted[:10]):
+            antecedent_str = ', '.join(sorted(rule['antecedent']))
+            consequent_str = ', '.join(sorted(rule['consequent']))
+            quality_score = rule['confidence'] * rule['lift']
+            print(f"  {i + 1:2d}. {{{antecedent_str}}} → {{{consequent_str}}}")
+            print(
+                f"      Quality: {quality_score:.3f} | Confidence: {rule['confidence']:.3f} | Lift: {rule['lift']:.3f}")
+    else:
+        print("  No rules meet the balanced criteria")
+
+    # RULES INVOLVING 'whole milk'
+    print(f"\n🥛 RULES INVOLVING 'whole milk':")
+    print("-" * 60)
+    milk_rules = [rule for rule in rules
+                  if 'whole milk' in rule['antecedent'] or 'whole milk' in rule['consequent']]
+
+    if milk_rules:
+        milk_sorted = sort_rules(milk_rules, 'confidence', ascending=False)
+        for i, rule in enumerate(milk_sorted[:10]):
+            antecedent_str = ', '.join(sorted(rule['antecedent']))
+            consequent_str = ', '.join(sorted(rule['consequent']))
+            print(f"  {i + 1:2d}. {{{antecedent_str}}} → {{{consequent_str}}}")
+            print(
+                f"      Confidence: {rule['confidence']:.3f} | Lift: {rule['lift']:.3f} | Support: {rule['support']:.4f}")
+    else:
+        print("  No rules involving 'whole milk' found")
+
+
+def get_rules_for_item(rules: List[Dict], item: str, as_antecedent: bool = True) -> List[Dict]:
+    """
+    Get rules where a specific item appears as antecedent or consequent
+
+    Args:
+        rules (list): List of association rules
+        item (str): Item to search for
+        as_antecedent (bool): If True, find rules where the item is in antecedent
+
+    Returns:
+        list: Filtered rules containing the item
+    """
+    if as_antecedent:
+        return [rule for rule in rules if item in rule['antecedent']]
+    else:
+        return [rule for rule in rules if item in rule['consequent']]
+
+
+def print_rule_summary(rules: List[Dict], title: str = "Association Rules Summary") -> None:
+    """
+    Print a formatted summary of association rules
+
+    Args:
+        rules (list): List of association rules
+        title (str): Title for the summary
+    """
+    print(f"\n{title}")
+    print("-" * len(title))
+
+    if not rules:
+        print("No rules found.")
+        return
+
+    print(f"Total rules: {len(rules)}")
+
+    # Group by antecedent size
+    by_size = {}
+    for rule in rules:
+        size = len(rule['antecedent'])
+        if size not in by_size:
+            by_size[size] = []
+        by_size[size].append(rule)
+
+    for size in sorted(by_size.keys()):
+        count = len(by_size[size])
+        avg_conf = np.mean([rule['confidence'] for rule in by_size[size]])
+        avg_lift = np.mean([rule['lift'] for rule in by_size[size]])
+        print(f"  {size}-item antecedent: {count} rules (avg conf: {avg_conf:.3f}, avg lift: {avg_lift:.3f})")
